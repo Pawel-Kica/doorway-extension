@@ -9,8 +9,8 @@ export const now = () => pinned ?? new Date();
 // Pins the page time to `date`, null goes back to the real clock.
 export const pinTime = (date) => { pinned = date; };
 
-// Is `hour` inside [from, to), where the window may cross midnight.
-const within = (hour, from, to) => (from > to ? hour >= from || hour < to : hour >= from && hour < to);
+// Is `hour` inside [from, to), where the window may cross midnight. Super lock (js/lock.js) uses it too.
+export const within = (hour, from, to) => (from > to ? hour >= from || hour < to : hour >= from && hour < to);
 
 export const isDark = (hour) => state.settings.nightMode && within(hour, state.settings.nightFrom, state.settings.wakeAt);
 export const isSleep = (hour) => state.settings.sleepGreeting && within(hour, state.settings.sleepFrom, state.settings.wakeAt);

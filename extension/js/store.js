@@ -16,6 +16,9 @@ export const DEFAULTS = {
     sleepGreeting: true, // "Go to sleep" instead of "Good evening"
     sleepFrom: 22, // hour the greeting flips
     wakeAt: 4, // hour both end, also where "Good morning" starts
+    superLock: false, // Think twice sites don't open at all from lockFrom until lockUntil (js/lock.js)
+    lockFrom: 18,
+    lockUntil: 10,
   },
   current: null, // { key, slot } or { key, nextChangeAt } for 'random'
   favorites: [], // keys, newest first
@@ -23,7 +26,8 @@ export const DEFAULTS = {
   queues: {}, // enabled feeds joined with "+" -> { order: [keys], i }
   blocked: [], // sites blocker.js blocks, e.g. "bbc.com" or "bbc.com/news" (see sites.js)
   ask: [], // sites that ask "Do you really need it?" first (Think twice)
-  todos: {}, // Think twice entry -> [{ text, url?, later?, done? }], written by ask.js and todo.js
+  todos: {}, // Think twice entry -> [{ text, url?, later?, done? }], written by ask.js and todo.js (later: added on ask.html)
+  passes: {}, // Think twice entry -> end time (ms) of its running pass, see startPass in blocker.js
 };
 
 export const state = structuredClone(DEFAULTS);

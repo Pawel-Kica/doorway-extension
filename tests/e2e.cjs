@@ -494,7 +494,7 @@ async function newTab(ctx, time = '2026-09-15T10:35:00', sel = '.background-item
   await page.click('[data-tab="distractions"]');
   // Each list shows a mini copy of the page its sites open, with example.com as the site. Think twice also shows the todo pill.
   const sitePreviews = () => page.$$eval('.site-preview', (els) => els.map((e) => e.innerText.replace(/\s+/g, ' ').trim()));
-  check('distractions previews', JSON.stringify(await sitePreviews()) === '["You blocked example.com for a reason, so back to what matters.","Do you really need example.com? Yes Later No","Todos (2) Reply to Anna Check the voucher"]', JSON.stringify(await sitePreviews()));
+  check('distractions previews', JSON.stringify(await sitePreviews()) === '["You blocked example.com for a reason, so back to what matters.","Do you really need example.com? Yes Save No","Todos (2) Reply to Anna Check the voucher","example.com is super locked until 10 AM. OK"]', JSON.stringify(await sitePreviews()));
   await page.fill(`${blockList} input`, 'not a site');
   await page.keyboard.press('Enter');
   check('junk input blocks nothing', (await page.locator('.blocked-site').count()) === 0);
@@ -530,8 +530,8 @@ async function newTab(ctx, time = '2026-09-15T10:35:00', sel = '.background-item
   check('unblock removes the rule', (await page.locator('.blocked-site').count()) === 0 && (await rules(page)).length === 0, JSON.stringify(await rules(page)));
   check('unblocked site is not blocked', !(await landsOn('https://www.bbc.com/')).startsWith(blockedPage));
 
-  // Think twice: a listed site asks first. Yes asks what you need there and opens it for that tab,
-  // Later keeps a note or the link for next time, No goes to the new tab page.
+  // Think twice: a listed site asks first. Yes opens it right away for that tab,
+  // the list under the question takes notes, Save keeps the link for next time, No goes to the new tab page.
   // ask.test is a made-up site served by the route below, so nothing here needs the network.
   await ctx.route(/^http:\/\/(m\.)?ask\.test\//, (r) => r.fulfill(r.request().url().endsWith('.xml')
     ? { contentType: 'application/xml', body: '<?xml version="1.0"?><rss><channel><title>feed</title></channel></rss>' }
@@ -555,19 +555,16 @@ async function newTab(ctx, time = '2026-09-15T10:35:00', sel = '.background-item
   const asking = await ctx.newPage();
   await asking.goto('http://m.ask.test/watch?v=1&t=2').catch(() => {});
   check('listed site lands on the ask page with its URL', asking.url() === `${askPage}#http://m.ask.test/watch?v=1&t=2`, asking.url());
-  check('ask page names the site', (await text(asking, '#question p')) === 'Do you really need m.ask.test?', await text(asking, '#question p'));
+  check('ask page names the site', (await text(asking, '#question')) === 'Do you really need m.ask.test?', await text(asking, '#question'));
   await asking.screenshot({ path: `${SHOTS}/18-ask-page.png` });
   await asking.keyboard.press('y');
-  check('y is Yes', (await asking.locator('#need').isVisible()) && (await asking.inputValue('#need input')) === '', await asking.inputValue('#need input'));
-  await asking.fill('#need input', 'Reply to Anna');
-  await asking.click('#open');
   await asking.waitForURL('http://m.ask.test/watch?v=1&t=2', { timeout: 5000 }).catch(() => {});
-  check('yes opens the site', asking.url() === 'http://m.ask.test/watch?v=1&t=2' && (await text(asking, 'h1')) === 'the site', asking.url());
+  check('y is Yes, it opens the site', asking.url() === 'http://m.ask.test/watch?v=1&t=2' && (await text(asking, 'h1')) === 'the site', asking.url());
   // js/todo.js: the pill counts what is still open, the list under it is always open, the saved link on it
   const todo = (sel) => asking.locator(`#doorway-todos ${sel}`);
   await todo('.pill').waitFor({ timeout: 5000 }).catch(() => {});
   const pill = await todo('.pill').innerText().catch(() => '');
-  check('the site shows what you came for', pill.replace(/\s+/g, ' ').trim() === 'Todos (2)', pill);
+  check('the site shows its list with the saved link', pill.replace(/\s+/g, ' ').trim() === 'Todos (1)', pill);
   check('the list is open', await todo('.card').isVisible());
   check('the list shows on a site that hides undefined elements', (await todo('.dw').evaluate((e) => getComputedStyle(e).visibility)) === 'visible');
   check('the saved link is on the list', (await todo('a').getAttribute('href')) === post);
@@ -579,11 +576,10 @@ async function newTab(ctx, time = '2026-09-15T10:35:00', sel = '.background-item
   await todo('.pill').click();
   check('a click on the pill folds the list', !(await todo('.card').isVisible()));
   await todo('.pill').click();
-  check('+ adds an item', (await todo('.count').innerText()) === '(3)' && !(await todo('input').isVisible()), await todo('.count').innerText());
+  check('+ adds an item', (await todo('.count').innerText()) === '(2)' && !(await todo('input').isVisible()), await todo('.count').innerText());
   await asking.screenshot({ path: `${SHOTS}/19-todo-on-site.png` });
   await todo('.box').nth(0).click();
   await todo('.box').nth(1).click();
-  await todo('.box').nth(2).click();
   check('all done shows I\'m done!', (await todo('.finish').isVisible()) && (await todo('.finish').innerText()) === "I'm done!");
   // An RSS feed on the site is an XML page, the list's HTML can't go in there
   await asking.goto('http://ask.test/feed.xml').catch(() => {});
@@ -605,16 +601,33 @@ async function newTab(ctx, time = '2026-09-15T10:35:00', sel = '.background-item
   await refusing.keyboard.press('Enter');
   await refusing.waitForSelector('#clock', { timeout: 5000 }).catch(() => {});
   check('Enter is No, it goes to the new tab page', (await refusing.locator('#clock').count()) === 1, refusing.url());
-  // l is Later, the l is not typed into the note it focuses
+  // The list sits under the question, empty it says so. + opens a row in place, keys typed there stay text,
+  // Enter keeps the note right where it was typed and the list keeps its size.
   await refusing.goto('http://ask.test/').catch(() => {});
-  await refusing.keyboard.press('l');
-  check('l is Later', (await refusing.locator('#for-later').isVisible()) && (await refusing.inputValue('#for-later input')) === '', await refusing.inputValue('#for-later input'));
-  await refusing.screenshot({ path: `${SHOTS}/18-ask-later.png` });
-  await refusing.fill('#for-later input', 'Watch the talk');
-  await refusing.press('#for-later input', 'Enter');
-  await refusing.waitForSelector('#clock', { timeout: 5000 }).catch(() => {});
+  await refusing.waitForSelector('.empty');
+  const oneLine = async (p, sel) => (await text(p, sel)).replace(/\s+/g, ' ').trim();
+  check('an empty list says so', (await oneLine(refusing, '.items')) === 'Nothing, just checking out of habit 🙃', await oneLine(refusing, '.items'));
+  const listBox = async () => JSON.stringify(await refusing.locator('.notes').boundingBox());
+  const emptyBox = await listBox();
+  await refusing.click('.add');
+  const draftBox = await refusing.locator('.draft').boundingBox();
+  check('+ opens a focused row, the list keeps its size', (await refusing.locator('.draft input').evaluate((e) => e === document.activeElement)) && (await listBox()) === emptyBox, await listBox());
+  await refusing.keyboard.type('Watch the talk, yes now');
+  check('keys typed in the row stay text', refusing.url() === `${askPage}#http://ask.test/` && (await refusing.inputValue('.draft input')) === 'Watch the talk, yes now');
+  await refusing.keyboard.press('Enter');
+  await refusing.waitForSelector('.note:not(.draft)');
+  const noteBox = await refusing.locator('.note').first().boundingBox();
+  check('Enter keeps the note where it was typed', noteBox.y === draftBox.y && noteBox.height === draftBox.height && (await listBox()) === emptyBox, JSON.stringify([draftBox, noteBox]));
   const noted = JSON.stringify((await state(page)).todos);
-  check('later keeps the note', noted === JSON.stringify({ 'ask.test': [{ later: true, text: 'Watch the talk' }] }), noted);
+  check('the note is on the site\'s list', noted === JSON.stringify({ 'ask.test': [{ later: true, text: 'Watch the talk, yes now' }] }), noted);
+  await refusing.screenshot({ path: `${SHOTS}/18-ask-list.png` });
+  await refusing.click('.note');
+  await refusing.waitForSelector('.note.done');
+  check('a click checks a note off', JSON.stringify((await state(page)).todos['ask.test']) === '[{"done":true,"later":true,"text":"Watch the talk, yes now"}]', JSON.stringify((await state(page)).todos));
+  await refusing.click('.note');
+  await refusing.keyboard.press('Enter');
+  await refusing.waitForSelector('#clock', { timeout: 5000 }).catch(() => {});
+  check('after the note Enter is No again', (await refusing.locator('#clock').count()) === 1, refusing.url());
   // Like blocked.html, a clicked link only reaches ask.html because the page is web accessible
   await refusing.route('http://links.test/', (r) => r.fulfill({ contentType: 'text/html', body: '<a href="http://ask.test/from-link">ask</a>' }));
   await refusing.goto('http://links.test/');
@@ -628,6 +641,145 @@ async function newTab(ctx, time = '2026-09-15T10:35:00', sel = '.background-item
   await bad.waitForSelector('#clock', { timeout: 5000 }).catch(() => {});
   check('ask page without a web address goes to the new tab page', (await bad.locator('#clock').count()) === 1, bad.url());
   await bad.close();
+
+  // Pass (Pass on the Think twice row): every tab opens the site without asking until the pass ends,
+  // then tabs on the site keep it and the next tab asks again. The pill on the site counts down "End 19:59".
+  const passRow = `${askList} .blocked-site`;
+  const passes = async () => (await state(page)).passes;
+  const tabless = () => page.evaluate(async () => (await chrome.declarativeNetRequest.getSessionRules()).filter((r) => !r.condition.tabIds).length);
+  // The pass ends on real time (alarm, pill), the settings tab's clock is frozen in the past
+  await page.clock.setFixedTime(new Date());
+  await page.click(`${passRow} [data-act="pass-site"]`);
+  check('pass opens the length picker', (await page.locator(`${passRow} .pass-picker`).isVisible()) && (await text(page, `${passRow} .pass-picker`)).replace(/\s+/g, ' ').trim() === '15 min 30 min 1 hour min');
+  await page.fill(`${passRow} .pass-custom input`, '20');
+  await page.press(`${passRow} .pass-custom input`, 'Enter');
+  await page.waitForTimeout(300);
+  check('typed minutes start a pass', Math.abs((await passes())['ask.test'] - Date.now() - 20 * 60000) < 5000 && (await tabless()) === 1, JSON.stringify(await passes()));
+  check('the row names the end of the pass', /^ask\.test is free until \d/.test(await text(page, `${passRow} > span`)) && (await text(page, `${passRow} .pass-button`)) === 'End', await text(page, `${passRow} > span`));
+  await page.screenshot({ path: `${SHOTS}/18-pass-settings.png` });
+  const passing = await ctx.newPage();
+  await passing.goto('http://ask.test/pass').catch(() => {});
+  check('a pass opens the site without asking', passing.url() === 'http://ask.test/pass', passing.url());
+  check('every tab opens during the pass', (await landsOn('http://m.ask.test/other')) === 'http://m.ask.test/other');
+  const passPill = passing.locator('#doorway-todos .pill');
+  const pillText = async () => (await passPill.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+  await passPill.waitFor({ timeout: 5000 }).catch(() => {});
+  check('the pill counts the pass down', /^End (19:5\d|20:00)$/.test(await pillText()), await pillText());
+  await passing.screenshot({ path: `${SHOTS}/19-pass-pill.png` });
+  // The alarm, moved up to now (unpacked extensions have no 30s alarm minimum)
+  await page.evaluate(() => chrome.alarms.create('pass:ask.test', { when: Date.now() + 200 }));
+  await passing.waitForTimeout(1500);
+  check('the pass ends on its alarm', JSON.stringify(await passes()) === '{}' && (await tabless()) === 0 && (await pillText()) === 'Todos (1)', await pillText());
+  await passing.goto('http://ask.test/still').catch(() => {});
+  check('a tab open when the pass ends keeps the site', passing.url() === 'http://ask.test/still', passing.url());
+  check('the next tab asks again', (await landsOn('http://ask.test/')) === `${askPage}#http://ask.test/`);
+  check('the row drops the pass', (await text(page, `${passRow} .pass-button`)) === 'Pass' && (await text(page, `${passRow} > span`)) === 'ask.test');
+  await page.click(`${passRow} [data-act="pass-site"]`);
+  await page.click(`${passRow} [data-minutes="15"]`);
+  await passing.waitForFunction(() => document.querySelector('#doorway-todos').shadowRoot.querySelector('.label').textContent === 'End', null, { timeout: 5000 }).catch(() => {});
+  await passPill.click();
+  await passing.waitForTimeout(500);
+  check('a click on the pill ends the pass', JSON.stringify(await passes()) === '{}' && (await tabless()) === 0 && (await pillText()) === 'Todos (1)', await pillText());
+  await passing.close();
+  // A Chrome restart drops the alarm and skips onStartup, so the worker checks passes whenever it starts.
+  // Stops the worker, then a tab wakes it.
+  const restartWorker = async () => {
+    const cdp = await ctx.newCDPSession(page);
+    await cdp.send('ServiceWorker.enable');
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await cdp.detach();
+    await landsOn('http://ask.test/wake');
+    await page.waitForTimeout(500);
+  };
+  await page.click(`${passRow} [data-act="pass-site"]`);
+  await page.click(`${passRow} [data-minutes="15"]`);
+  await page.waitForTimeout(300);
+  await restartWorker();
+  const alarm = () => page.evaluate(() => chrome.alarms.get('pass:ask.test'));
+  check('a running pass outlives a worker restart', 'ask.test' in (await passes()) && (await tabless()) === 1 && Boolean(await alarm()), JSON.stringify(await passes()));
+  await page.evaluate(() => chrome.storage.local.set({ passes: { 'ask.test': Date.now() - 1000, 'gone.test': Date.now() + 3600e3 } }));
+  await restartWorker();
+  check('a pass past its end or without its rule ends when the worker starts', JSON.stringify(await passes()) === '{}' && (await tabless()) === 0 && !(await alarm()), JSON.stringify(await passes()));
+  check('the row drops the ended pass', (await text(page, `${passRow} .pass-button`)) === 'Pass');
+
+  // Super lock: in its hours a Think twice site doesn't open at all, its page says until when, with the list and OK.
+  // Turning it on mid-window takes back passes and every Yes. Hours around now, on real time like the worker's.
+  // The suite has the 12-hour clock on by now, the lock's times follow it
+  const hh = (h) => `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`;
+  check('the suite is on the 12-hour clock here', (await state(page)).settings.hour12 === true);
+  const hour = new Date().getHours();
+  const lockEnd = (hour + 2) % 24;
+  const sessionRules = () => page.evaluate(async () => (await chrome.declarativeNetRequest.getSessionRules()).length);
+  const yesTab = await ctx.newPage();
+  await yesTab.goto('http://ask.test/yes').catch(() => {});
+  await yesTab.keyboard.press('y');
+  await yesTab.waitForURL('http://ask.test/yes', { timeout: 5000 }).catch(() => {});
+  await page.click(`${passRow} [data-act="pass-site"]`);
+  await page.click(`${passRow} [data-minutes="15"]`);
+  await page.waitForTimeout(300);
+  check('before the lock: a Yes tab and a pass', yesTab.url() === 'http://ask.test/yes' && 'ask.test' in (await passes()) && (await sessionRules()) >= 2, yesTab.url());
+  await page.locator('#super-lock').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `${SHOTS}/17-super-lock-off.png` });
+  await page.selectOption('[data-hour="lockFrom"]', String(hour));
+  await page.selectOption('[data-hour="lockUntil"]', String(lockEnd));
+  await page.click('[data-setting="superLock"]');
+  await yesTab.waitForURL(`${askPage}#http://ask.test/yes`, { timeout: 5000 }).catch(() => {});
+  check('turning super lock on sends an open tab back to its page', yesTab.url() === `${askPage}#http://ask.test/yes`, yesTab.url());
+  check('super lock ends the pass and takes back every Yes', JSON.stringify(await passes()) === '{}' && (await sessionRules()) === 0, JSON.stringify(await passes()));
+  const lockAlarm = await page.evaluate(() => chrome.alarms.get('lock'));
+  check('an alarm waits for the next start of the lock', Boolean(lockAlarm) && new Date(lockAlarm.scheduledTime).getHours() === hour && lockAlarm.scheduledTime > Date.now(), JSON.stringify(lockAlarm));
+  await yesTab.waitForSelector('#locked:not([hidden])');
+  check('the locked page says until when, with only OK', (await text(yesTab, '#locked')) === `ask.test is super locked until ${hh(lockEnd)}.`
+    && (await yesTab.locator('#question').isHidden()) && (await yesTab.locator('#yes').isHidden()) && (await yesTab.locator('#ok').isVisible()), await text(yesTab, '#locked'));
+  await yesTab.keyboard.press('y');
+  check('y does nothing while locked', yesTab.url() === `${askPage}#http://ask.test/yes`, yesTab.url());
+  await yesTab.click('.add');
+  await yesTab.keyboard.type('Text Matthew about the flat');
+  await yesTab.keyboard.press('Enter');
+  await yesTab.waitForSelector('.note:not(.draft)');
+  check('the list still takes a note while locked', JSON.stringify((await state(page)).todos['ask.test']).includes('{"later":true,"text":"Text Matthew about the flat"}'), JSON.stringify((await state(page)).todos));
+  await yesTab.screenshot({ path: `${SHOTS}/18-super-locked.png` });
+  await yesTab.keyboard.press('Enter');
+  await yesTab.waitForSelector('#clock', { timeout: 5000 }).catch(() => {});
+  check('Enter is OK, it goes to the new tab page', (await yesTab.locator('#clock').count()) === 1, yesTab.url());
+  await yesTab.close();
+  check('a new tab on the site lands on the locked page', (await landsOn('http://ask.test/')) === `${askPage}#http://ask.test/`);
+  check('settings: the header says until when', (await text(page, '#super-lock .lock-label')) === `Locked until ${hh(lockEnd)}`, await text(page, '#super-lock .lock-label'));
+  check('settings: the switch and hours give no way', (await page.locator('[data-setting="superLock"]').count()) === 0
+    && (await page.locator('[data-hour="lockFrom"]').isDisabled()) && (await page.locator('[data-hour="lockUntil"]').isDisabled()));
+  check('settings: think twice rows have no Pass and no x', (await page.locator(`${passRow} .pass-button`).count()) === 0
+    && (await page.locator(`${askList} [data-act="remove-site"]`).count()) === 0);
+  await page.locator('#super-lock').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `${SHOTS}/17-super-lock-on.png` });
+  const lockedTab = await newTab(ctx, Date.now(), '#lock-item:not([hidden])');
+  check('the new tab says super locked until, bottom left', (await oneLine(lockedTab, '#lock-button')) === `Super locked until ${hh(lockEnd)}`, await oneLine(lockedTab, '#lock-button'));
+  await lockedTab.screenshot({ path: `${SHOTS}/17-super-lock-new-tab.png` });
+  await lockedTab.click('#lock-button');
+  await lockedTab.waitForTimeout(400);
+  check('a click on it opens Settings at Super lock', (await lockedTab.locator('.nav .item.active').innerText()) === 'Distractions' && (await lockedTab.locator('#super-lock').isVisible()));
+  await lockedTab.close();
+  // A leftover allow rule (a Yes the worker never saw end) goes when the lock's alarm fires, and when the worker starts
+  const leftover = () => page.evaluate(() => chrome.declarativeNetRequest.updateSessionRules({ addRules: [{ id: 900, priority: 2, action: { type: 'allow' },
+    condition: { requestDomains: ['ask.test'], resourceTypes: ['main_frame'] } }] }));
+  await leftover();
+  const stray = await ctx.newPage();
+  await stray.goto('http://ask.test/stray').catch(() => {});
+  await page.evaluate(() => chrome.alarms.create('lock', { when: Date.now() + 200 }));
+  await stray.waitForURL(`${askPage}#http://ask.test/stray`, { timeout: 5000 }).catch(() => {});
+  check('the lock\'s alarm takes back what got through', stray.url() === `${askPage}#http://ask.test/stray` && (await sessionRules()) === 0, stray.url());
+  await stray.close();
+  await leftover();
+  await restartWorker();
+  check('a worker start takes it back too', (await sessionRules()) === 0);
+  await page.evaluate(async () => (await import('/js/store.js')).setSetting('superLock', false));
+  await page.waitForTimeout(300);
+  check('lock off: the site asks again and the alarm is gone', (await landsOn('http://ask.test/')) === `${askPage}#http://ask.test/` && !(await page.evaluate(() => chrome.alarms.get('lock'))));
+  const asksAgain = await ctx.newPage();
+  await asksAgain.goto('http://ask.test/').catch(() => {});
+  check('lock off: the page asks with Yes again', (await asksAgain.locator('#yes').isVisible()) && (await asksAgain.locator('#locked').isHidden()));
+  await asksAgain.close();
+  await page.clock.setFixedTime(new Date('2026-09-15T10:35:00'));
+
   await page.fill(`${blockList} input`, 'ask.test');
   await page.keyboard.press('Enter');
   await page.waitForSelector(`${blockList} .blocked-site`);
@@ -667,7 +819,6 @@ async function newTab(ctx, time = '2026-09-15T10:35:00', sel = '.background-item
   await gmail.waitForURL(`${askPage}#${cachedUrl}#inbox`, { timeout: 5000 }).catch(() => {});
   check('cached site lands on the ask page', gmail.url() === `${askPage}#${cachedUrl}#inbox`, gmail.url());
   await gmail.click('#yes');
-  await gmail.click('#open');
   await gmail.waitForURL(`${cachedUrl}#inbox`, { timeout: 5000 }).catch(() => {});
   await gmail.waitForTimeout(500);
   check('yes opens the cached site and it stays open', gmail.url() === `${cachedUrl}#inbox`, gmail.url());

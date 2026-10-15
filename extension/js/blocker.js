@@ -2,7 +2,7 @@
 // one rule per entry (see sites.js for what an entry covers).
 // state.blocked: page loads go to blocked.html, which names the site (js/blocked.js).
 // state.ask (Think twice): page loads go to ask.html, which asks "Do you really need it?" and on Yes
-// lets that tab through (js/ask.js). A site on both lists is blocked.
+// lets that tab through (js/ask.js). A pass lets every tab through for a while (startPass). A site on both lists is blocked.
 
 import { state, save } from './store.js';
 import { condition } from './sites.js';
@@ -26,6 +26,18 @@ export async function syncBlocked() {
     .map(([site, action, priority], i) => ({ id: i + 1, priority, action, condition: condition(site) }));
   const old = await chrome.declarativeNetRequest.getDynamicRules();
   return chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: old.map((r) => r.id), addRules: rules });
+}
+
+// Pass on a Think twice entry (Pass on its row in Settings > Distractions): every tab opens it without asking for `minutes`.
+// A session allow rule with no tab ids (priority 2, like Yes in ask.js) plus the end time in state.passes, which js/todo.js
+// counts down on the site. Its alarm ends it in js/background.js (endPass).
+export async function startPass(site, minutes) {
+  const endsAt = Date.now() + minutes * 60000;
+  const rules = await chrome.declarativeNetRequest.getSessionRules();
+  const id = Math.max(0, ...rules.map((r) => r.id)) + 1;
+  await chrome.declarativeNetRequest.updateSessionRules({ addRules: [{ id, priority: 2, action: { type: 'allow' }, condition: condition(site) }] });
+  await chrome.alarms.create(`pass:${site}`, { when: endsAt });
+  await save({ passes: { ...state.passes, [site]: endsAt } });
 }
 
 // Saves one list ("blocked" or "ask"), then applies it.

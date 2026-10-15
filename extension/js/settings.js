@@ -1,18 +1,20 @@
 // Settings panel: General (widget toggles, your name), Photos (My Photos / Nature / Favorites / History grids, Settings sub-tab),
-// Night mode (photo off at night, "Go to sleep" greeting, hours) and Distractions (blocked websites, Think twice websites).
+// Night mode (photo off at night, "Go to sleep" greeting, hours) and Distractions (blocked websites, Think twice websites,
+// super lock).
 
 import { state, setSetting, save, emit } from './store.js';
 import { icon } from './icons.js';
 import { esc, toggle, dismissOnOutside } from './dom.js';
 import { greeting, withName } from './greeting.js';
 import { isDark, pinTime } from './night.js';
-import { setSites, canBlock } from './blocker.js';
+import { setSites, canBlock, startPass } from './blocker.js';
 import { toSite } from './sites.js';
+import { isLocked, hourLabel, untilText } from './lock.js';
 import { getPhoto, exists, customKeys, stockKeys, addFiles, setCurrent, showNext, updateCustom, deleteCustom, toggleFavorite, periodFor } from './photos.js';
 
 const panel = document.getElementById('settings');
 const toggleBtn = document.getElementById('settings-toggle');
-const ui = { open: false, tab: 'general', photosTab: 'custom', editingId: null };
+const ui = { open: false, tab: 'general', photosTab: 'custom', editingId: null, passing: null }; // passing: the Think twice row with its pass picker open
 
 const FEEDS = [
   ['stock', 'Nature photos', 'See a new photo from the curated nature feed'],
@@ -60,11 +62,10 @@ function generalPanel() {
 }
 
 // Hour dropdown; carries data-hour="<setting>" so the change handler knows what to save.
-function hourSelect(setting) {
+function hourSelect(setting, disabled = false) {
   const { hour12 } = state.settings;
-  const label = (h) => (hour12 ? `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}` : `${String(h).padStart(2, '0')}:00`);
-  const opts = Array.from({ length: 24 }, (_, h) => `<option value="${h}"${state.settings[setting] === h ? ' selected' : ''}>${label(h)}</option>`);
-  return `<select class="hour-select" data-hour="${setting}">${opts.join('')}</select>`;
+  const opts = Array.from({ length: 24 }, (_, h) => `<option value="${h}"${state.settings[setting] === h ? ' selected' : ''}>${hourLabel(h, hour12)}</option>`);
+  return `<select class="hour-select" data-hour="${setting}"${disabled ? ' disabled' : ''}>${opts.join('')}</select>`;
 }
 
 // Mini new tab at `hour`: black when `dark`, else the current photo. Dimmed while its toggle is off.
@@ -130,8 +131,7 @@ function nightPanel() {
 // A typed URL keeps its path, so it covers only that part of the site (see sites.js).
 // `preview` is the inside of a mini copy of the page a listed site opens, `extra` an optional second preview next to it.
 function siteList(key, title, desc, button, preview, extra = '') {
-  const sites = state[key].map((d) =>
-    `<div class="blocked-site" data-site="${esc(d)}"><span>${esc(d)}</span><button data-act="remove-site" title="Remove">${icon('x')}</button></div>`);
+  const sites = state[key].map((d) => siteRow(key, d));
   return `
       <div class="section" data-list="${key}">
         <div class="section-header">${title}</div>
@@ -145,11 +145,59 @@ function siteList(key, title, desc, button, preview, extra = '') {
       </div>`;
 }
 
-// Distractions tab: blocked websites, and Think twice websites that ask before they open.
+// Lengths a pass can have, plus typed minutes
+const passPicker = `<div class="pass-picker">${[[15, '15 min'], [30, '30 min'], [60, '1 hour']]
+  .map(([m, label]) => `<button class="button button-neutral" data-minutes="${m}">${label}</button>`).join('')}
+  <label class="pass-custom"><input inputmode="numeric" maxlength="3" spellcheck="false">min</label></div>`;
+
+// One site of a list. A Think twice row gets Pass, which opens the length picker under it, and during a pass
+// reads "youtube.com is free until 23:40" with End. Passes need the alarms permission, so Pass waits for a Reload with it.
+// During super lock a Think twice row has neither Pass nor x: no pass, and the site stays on the list.
+function siteRow(key, site) {
+  const locked = key === 'ask' && isLocked(state.settings);
+  const until = key === 'ask' && state.passes[site];
+  const time = until && new Date(until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: state.settings.hour12 });
+  const pass = key !== 'ask' || !chrome.alarms || locked ? ''
+    : `<button class="button button-neutral pass-button" data-act="${until ? 'end-pass' : 'pass-site'}">${until ? 'End' : 'Pass'}</button>`;
+  const remove = locked ? '' : `<button data-act="remove-site" title="Remove">${icon('x')}</button>`;
+  return `<div class="blocked-site" data-site="${esc(site)}">
+      <span>${until ? `<em>${esc(site)}</em> is free until <em>${time}</em>` : esc(site)}</span>
+      <div class="site-actions">${pass}${remove}</div>
+      ${ui.passing === site ? passPicker : ''}
+    </div>`;
+}
+
+// Starts a pass from the picker under a Think twice row.
+function passSite(site, minutes) {
+  if (!(minutes > 0)) return;
+  ui.passing = null;
+  return startPass(site, minutes);
+}
+
+// Super lock (js/lock.js): every day in these hours Think twice sites don't open at all. While it's on nothing here
+// gives way: the switch and the hours are disabled, the header says until when.
+function lockSection() {
+  const s = state.settings;
+  const on = isLocked(s);
+  const locked = `<p><em>example.com</em> is super locked ${esc(untilText(s))}.</p><div class="site-preview-answers"><span>OK</span></div>`;
+  return `
+      <div class="section" id="super-lock">
+        <div class="section-header">Super lock${on ? `<span class="lock-label">${icon('lock')}Locked ${esc(untilText(s))}</span>` : ''}</div>
+        <div class="option-description">Think twice sites don't open in these hours</div>
+        <div class="site-previews"><div class="site-preview"><img src="icons/icon128.png" alt="">${locked}</div></div>
+        <div class="lock-options${on ? ' on' : ''}">
+          ${option(on ? '' : 'data-setting="superLock"', 'Super lock', 'Every day, no Yes, Save or Pass', toggle(s.superLock))}
+          ${option('', 'From', 'When the lock starts', hourSelect('lockFrom', on))}
+          ${option('', 'Until', 'When the sites ask again', hourSelect('lockUntil', on))}
+        </div>
+      </div>`;
+}
+
+// Distractions tab: blocked websites, Think twice websites that ask before they open, and super lock.
 // The previews copy blocked.html and ask.html, with example.com as the site, and the todo pill js/todo.js puts on a site after Yes.
 function distractionsPanel() {
   const blocked = '<p>You blocked <em>example.com</em> for a reason, so back to what matters.</p>';
-  const ask = `<p>Do you really need <em>example.com</em>?</p><div class="site-preview-answers"><span>Yes</span><span>Later</span><span>No</span></div>`;
+  const ask = `<p>Do you really need <em>example.com</em>?</p><div class="site-preview-answers"><span>Yes</span><span>Save</span><span>No</span></div>`;
   const todos = `<div class="site-preview site-preview-page">
           <div class="site-preview-pill"><img src="icons/icon128.png" alt="">Todos <em>(2)</em></div>
           <div class="site-preview-card"><span>Reply to Anna</span><em>Check the voucher</em></div>
@@ -160,7 +208,8 @@ function distractionsPanel() {
       <div class="setting-panel-description">Stay away from websites that distract you</div>
       ${canBlock() ? '' : '<div class="block-note">Nothing is blocked yet. Reload this extension on chrome://extensions to turn blocking on.</div>'}
       ${siteList('blocked', 'Blocked websites', 'The site never opens, you see this instead', 'Block', blocked)}
-      ${siteList('ask', 'Think twice', 'The site asks why you need it, then keeps your answer in the corner', 'Add', ask, todos)}
+      ${siteList('ask', 'Think twice', 'The site asks if you really need it and shows your list for it', 'Add', ask, todos)}
+      ${lockSection()}
     </div>`;
 }
 
@@ -273,7 +322,7 @@ export function renderSettings() {
   toggleBtn.classList.toggle('open', ui.open);
   toggleBtn.innerHTML = icon(ui.open ? 'appSettingsFill' : 'appSettings');
   if (!ui.open && panel.firstChild) return;
-  if (panel.querySelector('.edit-photo input:focus, .name-input:focus')) return; // don't clobber typing
+  if (panel.querySelector('.edit-photo input:focus, .name-input:focus, .pass-custom input:focus')) return; // don't clobber typing
   const scroll = panel.querySelector('.content')?.scrollTop || 0;
   const nav = [['general', 'General'], ['photos', 'Photos'], ['night', 'Night mode'], ['distractions', 'Distractions']]
     .map(([v, label]) => `<div class="item${ui.tab === v ? ' active' : ''}" data-tab="${v}">${label}</div>`).join('');
@@ -317,8 +366,16 @@ async function onClick(e) {
     return save({ settings: { ...state.settings, frequency }, current: state.current && { key: state.current.key, ...periodFor(frequency) } });
   }
   if (d('[data-fit]')) return setSetting('fit', d('[data-fit]').dataset.fit);
+  if (d('[data-minutes]')) return passSite(d('[data-site]').dataset.site, Number(d('[data-minutes]').dataset.minutes));
   const act = d('[data-act]')?.dataset.act;
   const list = d('[data-list]')?.dataset.list;
+  const site = d('[data-site]')?.dataset.site;
+  if (act === 'pass-site') {
+    ui.passing = ui.passing === site ? null : site;
+    renderSettings();
+    return panel.querySelector('.pass-custom input')?.focus();
+  }
+  if (act === 'end-pass') return chrome.runtime.sendMessage({ endPass: site });
   if (act === 'add-site') return addSite(list);
   if (act === 'remove-site') return setSites(list, state[list].filter((s) => s !== d('[data-site]').dataset.site));
   const key = d('[data-key]')?.dataset.key;
@@ -357,6 +414,14 @@ export function initSettings() {
   panel.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.closest('.block-add')) return addSite(e.target.closest('[data-list]').dataset.list);
     if (e.key === 'Enter' && e.target.matches('.name-input')) return e.target.blur();
+    // Typed minutes: Enter starts the pass, Escape closes the picker
+    if (e.target.closest('.pass-custom') && ['Enter', 'Escape'].includes(e.key)) {
+      e.stopPropagation();
+      e.target.blur();
+      if (e.key === 'Enter') return passSite(e.target.closest('[data-site]').dataset.site, Number.parseInt(e.target.value, 10));
+      ui.passing = null;
+      return renderSettings();
+    }
     if (!e.target.closest('.edit-photo')) return;
     if (e.key === 'Enter') saveEdit();
     if (e.key === 'Escape') {

@@ -1,6 +1,7 @@
 // Content script: the todo list of a Think twice site (filled on ask.html, see js/ask.js), shown on every page of the
 // site itself. A pill in the top right corner reads "Todos (n)" with n still open, the list under it is open on every
-// page load, a click on the pill folds or unfolds it.
+// page load, a click on the pill folds or unfolds it. During a pass (js/blocker.js) the pill reads "End 12:34", counting down,
+// and a click ends the pass.
 // Runs on every page, but only asks the background worker (js/background.js) on a host from the Think twice list.
 // After a Reload on chrome://extensions this copy keeps running on pages that were open, cut off from the extension:
 // every chrome.* call then throws "Extension context invalidated", so clicks check chrome.runtime?.id first and do nothing.
@@ -30,12 +31,13 @@
       button { font: inherit; color: inherit; border: 0; outline: none; cursor: pointer; }
       .pill { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 34px 4px 26px; border-radius: 18px 18px 0 0;
         background: hsl(151 47% 24%); }
-      .folded .pill { height: 40px; padding-bottom: 0; border-radius: 1000rem; }
-      .folded .pill:hover { background: hsl(151 47% 28%); }
+      /* bare: a pass with nothing on the list, the pill alone */
+      :is(.folded, .bare) .pill { height: 40px; padding-bottom: 0; border-radius: 1000rem; }
+      :is(.folded, .bare) .pill:hover { background: hsl(151 47% 28%); }
       .pill img { width: 24px; height: 24px; }
       .count, h3 em, .later, a { color: #fde9b5; font-style: normal; }
       .card { width: 340px; padding: 18px; box-sizing: border-box; border-radius: 10px 0 10px 10px; background: hsl(151 47% 24%); }
-      .folded .card { display: none; }
+      :is(.folded, .bare) .card { display: none; }
       header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
       /* px, not rem: rem follows the site's <html> font-size, YouTube's 10px shrank this to 10.5px */
       h3 { margin: 0; font: inherit; font-size: 15px; }
@@ -60,7 +62,7 @@
       .finish[hidden] { display: none; }
     </style>
     <div class="dw" hidden>
-      <button class="pill"><img src="${chrome.runtime.getURL('icons/icon128.png')}" alt="">Todos <span class="count"></span></button>
+      <button class="pill"><img src="${chrome.runtime.getURL('icons/icon128.png')}" alt=""><span class="label"></span> <span class="count"></span></button>
       <div class="card">
         <header><h3>You came to <em>${here.replace(/^www\./, '')}</em> to:</h3><button class="add" title="Add">+</button></header>
         <div class="items"></div>
@@ -78,12 +80,23 @@
     await chrome.storage.local.set({ todos: { ...todos, [site]: fn(todos[site] ?? []) } });
   };
 
+  // End time of the site's pass, 0 without one. "12:34" left, "1:02:03" from an hour up.
+  let endsAt = 0;
+  const left = () => {
+    const s = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+    const mmss = `${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    return s >= 3600 ? `${Math.floor(s / 3600)}:${mmss}` : mmss;
+  };
+
   async function render() {
-    const { todos = {} } = await chrome.storage.local.get('todos');
+    const { todos = {}, passes = {} } = await chrome.storage.local.get(['todos', 'passes']);
     const list = todos[site] ?? [];
     const open = list.filter((t) => !t.done);
-    $('.dw').hidden = !list.length;
-    $('.count').textContent = `(${open.length})`;
+    endsAt = passes[site] ?? 0;
+    $('.dw').hidden = !list.length && !endsAt;
+    $('.dw').classList.toggle('bare', !list.length);
+    $('.label').textContent = endsAt ? 'End' : 'Todos';
+    $('.count').textContent = endsAt ? left() : `(${open.length})`;
     $('.finish').hidden = Boolean(open.length);
     $('.items').replaceChildren(...list.map((t, i) => {
       const row = document.createElement('div');
@@ -101,7 +114,11 @@
     }));
   }
 
-  $('.pill').onclick = () => $('.dw').classList.toggle('folded');
+  $('.pill').onclick = () => {
+    if (!endsAt) return $('.dw').classList.toggle('folded');
+    if (chrome.runtime?.id) chrome.runtime.sendMessage({ endPass: site });
+  };
+  setInterval(() => endsAt && ($('.count').textContent = left()), 1000);
   // + shows the input, Enter adds the item and hides it again, Escape just hides it
   $('.add').onclick = () => { $('input').hidden = !$('input').hidden; $('input').focus(); };
   // Keys typed here stay here, so the site's own shortcuts (Gmail's "c" for compose) do not fire
@@ -119,7 +136,7 @@
     await update((l) => l.filter((t) => !t.done));
     chrome.runtime.sendMessage('done');
   };
-  chrome.storage.onChanged.addListener((changes) => { if (changes.todos) render(); });
+  chrome.storage.onChanged.addListener((changes) => { if (changes.todos || changes.passes) render(); });
 
   render();
 })();

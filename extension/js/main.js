@@ -7,6 +7,8 @@ import { initPopup, renderPopup } from './popup.js';
 import { initSettings, renderSettings, openSettings } from './settings.js';
 import { isDark, now } from './night.js';
 import { syncBlocked } from './blocker.js';
+import { isLocked, untilText } from './lock.js';
+import { icon } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 let shownKey = null;
@@ -69,6 +71,17 @@ function renderLocation() {
   el.hidden = !el.textContent || isDark(now().getHours());
 }
 
+// Bottom-left "Super locked until 10:00" while super lock is on (js/lock.js). The lock starting or ending re-renders
+// Settings, which locks or frees its rows.
+let locked = null;
+function renderLock() {
+  const on = isLocked(state.settings, now());
+  $('lock-item').hidden = !on;
+  $('lock-button').innerHTML = `${icon('lock')}Super locked ${untilText(state.settings, (t) => `<em>${t}</em>`)}`;
+  if (locked !== null && on !== locked) renderSettings();
+  locked = on;
+}
+
 // During night hours (Settings > Night mode) the page is plain black behind the clock, no photo at all.
 // A tab open across the boundary fades the photo out, then the layers are dropped;
 // in the morning the photo comes back. Rotation underneath is untouched, this is only a display rule.
@@ -92,6 +105,7 @@ function renderAll() {
   renderClock();
   renderGreeting();
   renderLocation();
+  renderLock();
   renderPopup();
   renderSettings();
   renderBackground();
@@ -141,6 +155,11 @@ async function boot() {
   initPopup();
   initSettings();
   initDragAndDrop();
+  // A click on the bottom-left lock opens Settings at Super lock
+  $('lock-button').addEventListener('click', () => {
+    openSettings('distractions');
+    document.getElementById('super-lock')?.scrollIntoView({ block: 'center' });
+  });
   subscribe(renderAll);
   renderAll();
   // Keep open tabs in sync so a stale tab never overwrites newer favorites/history.
@@ -159,6 +178,7 @@ async function boot() {
     renderClock();
     tickGreeting();
     renderLocation();
+    renderLock();
   }, 1000);
 }
 

@@ -7,7 +7,7 @@
   "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "chrome_url_overrides": { "newtab": "newtab.html" },
   "background": { "service_worker": "js/background.js", "type": "module" },
-  "permissions": ["storage", "unlimitedStorage", "declarativeNetRequest"],
+  "permissions": ["storage", "unlimitedStorage", "declarativeNetRequest", "alarms"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["js/todo.js"] }],
   "web_accessible_resources": [{ "resources": ["blocked.html", "ask.html", "icons/icon128.png"], "matches": ["<all_urls>"] }]

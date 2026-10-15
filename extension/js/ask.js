@@ -1,21 +1,17 @@
 // Think twice page. blocker.js sends a listed site here as ask.html#<url>.
-// Yes asks what you need there, then lets this tab open the site until the tab closes. Later asks what you want to do
-// there later, then goes to the new tab page, Save keeps the link for later and No goes there right away.
-// Keys answer the question too: y Yes, s Save, l Later, n or Enter No.
-// What you type lands in the site's todo list (storage `todos`), which js/todo.js shows on the site after a Yes.
+// Yes lets this tab open the site right away, until the tab closes. Save keeps the link on the site's list and goes to
+// the new tab page, No goes there right away. Keys answer too: y Yes, s Save, n or Enter No.
+// During super lock (js/lock.js) it only says until when the site is locked, OK (or Enter) goes to the new tab page.
+// Both show the site's list (storage `todos`, which js/todo.js shows on the site after a Yes): + adds a note as the
+// next row, Enter keeps it, Escape drops it, a click on a note checks it off.
 
 import { condition, covers } from './sites.js';
+import { isLocked, untilText } from './lock.js';
 
 const target = URL.parse(location.hash.slice(1));
 const $ = (sel) => document.querySelector(sel);
 
 const toNewTab = () => chrome.tabs.update({ url: 'chrome://newtab' });
-
-// Shows one step: "question", "need" (after Yes) or "for-later".
-function show(step) {
-  for (const s of document.querySelectorAll('section')) s.hidden = s.id !== step;
-  $(`#${step} input`)?.focus();
-}
 
 // "https://www.reddit.com/r/x/comments/1w6/gpt_6_astra/" -> "Gpt 6 astra", the way a saved link reads in the list.
 function linkTitle({ hostname, pathname }) {
@@ -28,10 +24,11 @@ function linkTitle({ hostname, pathname }) {
 // The page is web accessible, so any site can link here with its own hash. Only web addresses get asked about.
 if (!/^https?:$/.test(target?.protocol)) toNewTab();
 else {
-  const { ask = [] } = await chrome.storage.local.get('ask');
+  const { ask = [], settings = {} } = await chrome.storage.local.get(['ask', 'settings']);
   // The list entry this URL falls under keeps the todos, so every page of the site shares one list.
   const entries = ask.filter((site) => covers(condition(site), target.href));
   const entry = entries[0] ?? target.hostname.replace(/^www\./, '');
+  const locked = isLocked(settings);
 
   // Rewrites this site's todo list: [{ text, url?, later?, done? }], the first open item is the one on the pill.
   const updateList = async (fn) => {
@@ -39,11 +36,11 @@ else {
     await chrome.storage.local.set({ todos: { ...todos, [entry]: fn(todos[entry] ?? []) } });
   };
 
-  // Yes, then Open: what you typed goes on top, last visit's done items go. Then an allow rule for the entry
-  // in this tab (gone when Chrome quits), so moving around the site does not ask again, and the site loads.
+  // Yes: last visit's done items go, then an allow rule for the entry in this tab (gone when Chrome quits),
+  // so moving around the site does not ask again, and the site loads. A page left open until the lock started asks again.
   const open = async () => {
-    const text = $('#need input').value.trim();
-    await updateList((list) => [...(text ? [{ text }] : []), ...list.filter((t) => !t.done)]);
+    if (isLocked((await chrome.storage.local.get('settings')).settings ?? {})) return location.reload();
+    await updateList((list) => list.filter((t) => !t.done));
     const { id: tab } = await chrome.tabs.getCurrent();
     const rules = await chrome.declarativeNetRequest.getSessionRules();
     const addRules = entries.map((site, i) => (
@@ -52,29 +49,59 @@ else {
     location.replace(target.href);
   };
 
-  // Later, then OK keeps the note, empty OK just leaves. Save keeps this URL, titled from its path.
-  const later = async (withLink) => {
-    const text = $('#for-later input').value.trim();
-    if (text || withLink) await updateList((list) => [...list, { text: text || linkTitle(target), later: true, ...(withLink && { url: target.href }) }]);
+  // Save keeps this URL, titled from its path.
+  const save = async () => {
+    await updateList((list) => [...list, { text: linkTitle(target), later: true, url: target.href }]);
     toNewTab();
   };
 
-  for (const el of document.querySelectorAll('.site')) el.textContent = target.hostname.replace(/^www\./, '');
-  $('#yes').addEventListener('click', () => show('need'));
-  $('#save').addEventListener('click', () => later(true));
-  $('#later').addEventListener('click', () => show('for-later'));
-  $('#no').addEventListener('click', toNewTab);
-  for (const el of document.querySelectorAll('.back')) el.addEventListener('click', () => show('question'));
-  $('#open').addEventListener('click', open);
-  $('#ok').addEventListener('click', () => later(false));
-  $('#need input').addEventListener('keydown', (e) => e.key === 'Enter' && open());
-  $('#for-later input').addEventListener('keydown', (e) => e.key === 'Enter' && later(false));
+  // The list. `adding`: the + row is open, its input keeps what was typed across renders.
+  const input = Object.assign(document.createElement('input'), { spellcheck: false });
+  const draft = Object.assign(document.createElement('label'), { className: 'note draft' });
+  draft.append(input);
+  let adding = false;
+  async function renderList() {
+    const { todos = {} } = await chrome.storage.local.get('todos');
+    const list = todos[entry] ?? [];
+    const notes = list.map((t, i) => {
+      const note = Object.assign(document.createElement('button'), { className: `note${t.done ? ' done' : ''}`, tabIndex: -1, textContent: t.text });
+      note.onclick = () => updateList((l) => l.map((x, j) => (j === i ? { ...x, done: !x.done } : x)));
+      return note;
+    });
+    const empty = Object.assign(document.createElement('div'), { className: 'empty' });
+    empty.innerHTML = 'Nothing, just checking out of habit <span class="emoji">🙃</span>';
+    $('.items').replaceChildren(...notes, ...(adding ? [draft] : list.length ? [] : [empty]));
+    if (adding) input.focus();
+  }
+  const setAdding = (on) => {
+    adding = on;
+    input.value = '';
+    renderList();
+  };
+  $('.add').addEventListener('click', () => setAdding(!adding));
+  input.addEventListener('keydown', async (e) => {
+    const text = input.value.trim();
+    if (e.key === 'Enter' && text) await updateList((list) => [...list, { text, later: true }]);
+    if (['Enter', 'Escape'].includes(e.key)) setAdding(false);
+  });
+  chrome.storage.onChanged.addListener((changes) => changes.todos && renderList());
 
-  const keys = { y: '#yes', s: '#save', l: '#later', n: '#no', Enter: '#no' };
+  for (const el of document.querySelectorAll('.site')) el.textContent = target.hostname.replace(/^www\./, '');
+  $('#question').hidden = locked;
+  $('#answers').hidden = locked;
+  $('#locked').hidden = !locked;
+  $('#lock-answers').hidden = !locked;
+  $('#until').textContent = untilText(settings);
+  renderList();
+  $('#yes').addEventListener('click', open);
+  $('#save').addEventListener('click', save);
+  $('#no').addEventListener('click', toNewTab);
+  $('#ok').addEventListener('click', toNewTab);
+
+  const keys = locked ? { Enter: '#ok' } : { y: '#yes', s: '#save', n: '#no', Enter: '#no' };
   document.addEventListener('keydown', (e) => {
     const button = keys[e.key];
-    if (!button || $('#question').hidden || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-    // Else the y would also land in the input Yes focuses
+    if (!button || e.target === input || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
     e.preventDefault();
     $(button).click();
   });
