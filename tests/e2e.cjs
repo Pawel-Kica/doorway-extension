@@ -643,18 +643,17 @@ async function newTab(ctx, time = '2026-09-15T10:35:00', sel = '.background-item
   await bad.close();
 
   // Pass (Pass on the Think twice row): every tab opens the site without asking until the pass ends,
-  // then tabs on the site keep it and the next tab asks again. The pill on the site counts down "End 19:59".
+  // then tabs on the site keep it and the next tab asks again. The pill on the site counts down "End 14:59".
   const passRow = `${askList} .blocked-site`;
   const passes = async () => (await state(page)).passes;
   const tabless = () => page.evaluate(async () => (await chrome.declarativeNetRequest.getSessionRules()).filter((r) => !r.condition.tabIds).length);
   // The pass ends on real time (alarm, pill), the settings tab's clock is frozen in the past
   await page.clock.setFixedTime(new Date());
   await page.click(`${passRow} [data-act="pass-site"]`);
-  check('pass opens the length picker', (await page.locator(`${passRow} .pass-picker`).isVisible()) && (await text(page, `${passRow} .pass-picker`)).replace(/\s+/g, ' ').trim() === '15 min 30 min 1 hour min');
-  await page.fill(`${passRow} .pass-custom input`, '20');
-  await page.press(`${passRow} .pass-custom input`, 'Enter');
+  check('pass opens the length picker', (await page.locator(`${passRow} .pass-picker`).isVisible()) && (await text(page, `${passRow} .pass-picker`)).replace(/\s+/g, ' ').trim() === '15 min 30 min 1 hour');
+  await page.click(`${passRow} [data-minutes="15"]`);
   await page.waitForTimeout(300);
-  check('typed minutes start a pass', Math.abs((await passes())['ask.test'] - Date.now() - 20 * 60000) < 5000 && (await tabless()) === 1, JSON.stringify(await passes()));
+  check('15 min starts a pass', Math.abs((await passes())['ask.test'] - Date.now() - 15 * 60000) < 5000 && (await tabless()) === 1, JSON.stringify(await passes()));
   check('the row names the end of the pass', /^ask\.test is free until \d/.test(await text(page, `${passRow} > span`)) && (await text(page, `${passRow} .pass-button`)) === 'End', await text(page, `${passRow} > span`));
   await page.screenshot({ path: `${SHOTS}/18-pass-settings.png` });
   const passing = await ctx.newPage();
@@ -664,7 +663,7 @@ async function newTab(ctx, time = '2026-09-15T10:35:00', sel = '.background-item
   const passPill = passing.locator('#doorway-todos .pill');
   const pillText = async () => (await passPill.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
   await passPill.waitFor({ timeout: 5000 }).catch(() => {});
-  check('the pill counts the pass down', /^End (19:5\d|20:00)$/.test(await pillText()), await pillText());
+  check('the pill counts the pass down', /^End (14:5\d|15:00)$/.test(await pillText()), await pillText());
   await passing.screenshot({ path: `${SHOTS}/19-pass-pill.png` });
   // The alarm, moved up to now (unpacked extensions have no 30s alarm minimum)
   await page.evaluate(() => chrome.alarms.create('pass:ask.test', { when: Date.now() + 200 }));

@@ -145,10 +145,9 @@ function siteList(key, title, desc, button, preview, extra = '') {
       </div>`;
 }
 
-// Lengths a pass can have, plus typed minutes
+// Lengths a pass can have
 const passPicker = `<div class="pass-picker">${[[15, '15 min'], [30, '30 min'], [60, '1 hour']]
-  .map(([m, label]) => `<button class="button button-neutral" data-minutes="${m}">${label}</button>`).join('')}
-  <label class="pass-custom"><input inputmode="numeric" maxlength="3" spellcheck="false">min</label></div>`;
+  .map(([m, label]) => `<button class="button button-neutral" data-minutes="${m}">${label}</button>`).join('')}</div>`;
 
 // One site of a list. A Think twice row gets Pass, which opens the length picker under it, and during a pass
 // reads "youtube.com is free until 23:40" with End. Passes need the alarms permission, so Pass waits for a Reload with it.
@@ -169,7 +168,6 @@ function siteRow(key, site) {
 
 // Starts a pass from the picker under a Think twice row.
 function passSite(site, minutes) {
-  if (!(minutes > 0)) return;
   ui.passing = null;
   return startPass(site, minutes);
 }
@@ -322,7 +320,7 @@ export function renderSettings() {
   toggleBtn.classList.toggle('open', ui.open);
   toggleBtn.innerHTML = icon(ui.open ? 'appSettingsFill' : 'appSettings');
   if (!ui.open && panel.firstChild) return;
-  if (panel.querySelector('.edit-photo input:focus, .name-input:focus, .pass-custom input:focus')) return; // don't clobber typing
+  if (panel.querySelector('.edit-photo input:focus, .name-input:focus')) return; // don't clobber typing
   const scroll = panel.querySelector('.content')?.scrollTop || 0;
   const nav = [['general', 'General'], ['photos', 'Photos'], ['night', 'Night mode'], ['distractions', 'Distractions']]
     .map(([v, label]) => `<div class="item${ui.tab === v ? ' active' : ''}" data-tab="${v}">${label}</div>`).join('');
@@ -372,8 +370,7 @@ async function onClick(e) {
   const site = d('[data-site]')?.dataset.site;
   if (act === 'pass-site') {
     ui.passing = ui.passing === site ? null : site;
-    renderSettings();
-    return panel.querySelector('.pass-custom input')?.focus();
+    return renderSettings();
   }
   if (act === 'end-pass') return chrome.runtime.sendMessage({ endPass: site });
   if (act === 'add-site') return addSite(list);
@@ -414,14 +411,6 @@ export function initSettings() {
   panel.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.closest('.block-add')) return addSite(e.target.closest('[data-list]').dataset.list);
     if (e.key === 'Enter' && e.target.matches('.name-input')) return e.target.blur();
-    // Typed minutes: Enter starts the pass, Escape closes the picker
-    if (e.target.closest('.pass-custom') && ['Enter', 'Escape'].includes(e.key)) {
-      e.stopPropagation();
-      e.target.blur();
-      if (e.key === 'Enter') return passSite(e.target.closest('[data-site]').dataset.site, Number.parseInt(e.target.value, 10));
-      ui.passing = null;
-      return renderSettings();
-    }
     if (!e.target.closest('.edit-photo')) return;
     if (e.key === 'Enter') saveEdit();
     if (e.key === 'Escape') {
